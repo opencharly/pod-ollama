@@ -1,3 +1,4 @@
+version: 2026.232.0520
 ollama:
     candy:
         version: 2026.229.1218
