@@ -1,7 +1,7 @@
 version: 2026.232.0520
 ollama:
     candy:
-        version: 2026.229.1218
+        version: 2026.243.0100
         description: |
             GPU-agnostic Ollama LLM inference server on port 11434
             Installs the Ollama binary and runs `ollama serve` as a custom supervisord
@@ -29,7 +29,7 @@ ollama:
             # (the `ollama` image lists `cuda` explicitly), NOT a layer dependency.
             # This lets CPU consumers (e.g. `openclaw-desktop` on cachyos) compose the
             # layer without dragging the Fedora/NVIDIA `cuda` layer onto a pac base.
-            - '@github.com/opencharly/layer-supervisord:v2026.235.2056'
+            - '@github.com/opencharly/layer-supervisord:v2026.240.0121'
         var:
             # Upstream Ollama release for the TARBALL path only — the distros that
             # package ollama let their package manager own the version.
