@@ -1,5 +1,7 @@
+version: 2026.232.0520
 ollama:
     candy:
+        version: 2026.243.0100
         description: |
             GPU-agnostic Ollama LLM inference server on port 11434
             Installs the Ollama binary and runs `ollama serve` as a custom supervisord
@@ -154,6 +156,7 @@ ollama:
                 command: ${CHARLY_BIN} ollama list --server http://127.0.0.1:${HOST_PORT:11434}
                 in_container: false
             - agent-check: models pulled via `ollama pull` are stored under the ~/.ollama models volume and survive a service restart
+
 ollama-skill:
     skill:
         name: ollama
@@ -169,31 +172,31 @@ ollama-skill:
             MUST be invoked before building, deploying, configuring, or troubleshooting the ollama box.
         content: |-
             # ollama
-
+            
             Ollama LLM inference server. On a distro that packages ollama it is CPU-only by
             itself and a GPU backend is composed at the box level; on a tarball distro the
             upstream archive already bundles the CUDA backend.
-
+            
             ## Box Properties
-
+            
             The `ollama` BOX lives in a distro submodule — `box/fedora` and `box/cachyos` each
             define one today — not here, so its exact
             composition is stated there and not on this page — an earlier version of this
             table listed a candy set that a later box edit made wrong, which is the failure
             mode a cross-repo composition table has by construction. What is stable, and
             all this page should claim:
-
+            
             | Property | Value |
             |----------|-------|
             | Ports | 11434 |
             | Volumes | `models` → `~/.ollama` |
             | Registry | ghcr.io/opencharly |
-
+            
             The GPU base and the backend candy it composes are the box's choice; see
             `charly box list candies ollama` for what a given box actually stacks.
-
+            
             ## GPU is box-level — the `ollama` candy is GPU-agnostic
-
+            
             The `ollama` **candy** installs the Ollama binary and a supervisord
             `ollama serve` service, and carries **no GPU dependency** — it only
             `require:`s `supervisord`. Two install paths converge on one layout
@@ -242,21 +245,21 @@ ollama-skill:
             - A consumer that composes neither pays for neither ON A PACKAGED DISTRO —
               e.g. `/charly-openclaw:openclaw-desktop` (cachyos base, no GPU candy). On a
               tarball distro it still carries the bundled CUDA backend.
-
+            
             ## Ports
-
+            
             | Port | Service | Protocol |
             |------|---------|----------|
             | 11434 | Ollama API | HTTP |
-
+            
             ## Volumes
-
+            
             | Name | Path | Purpose |
             |------|------|---------|
             | models | ~/.ollama | Model storage |
-
+            
             ## Quick Start
-
+            
             ```bash
             charly box build ollama
             charly config ollama
@@ -264,20 +267,20 @@ ollama-skill:
             charly shell ollama -c "ollama pull llama3"
             charly shell ollama -c "ollama run llama3 'Hello'"
             ```
-
+            
             ## Host Alias
-
+            
             ```bash
             charly alias install ollama
             # Now: ollama pull llama3  (runs inside the container)
             ```
-
+            
             ## The `charly ollama` management CLI
-
+            
             The compiled-in `command:ollama` plugin (`candy/plugin-ollama`) manages a
             deployed Ollama server from the host over its HTTP API — no shell alias
             needed:
-
+            
             **11434 is the port INSIDE the container, not necessarily on your host.** A deploy
             can publish it elsewhere, and a check bed allocates the host port automatically. Read
             it from the `Ports:` line before you connect:
@@ -296,9 +299,9 @@ ollama-skill:
 
             Endpoint resolution: `--server` flag > `OLLAMA_HOST` env > `http://127.0.0.1:11434`.
             See `/charly-ollama:ollama-cli` for the full command tree.
-
+            
             ## Pinning the upstream version
-
+            
             `OLLAMA_VERSION` is PINNED to a release tag (`v0.32.14` today) and must
             stay one — this is not a default you can swap for `latest`. The download
             cache is content-addressed by the sha256 of the URL, so a `latest` URL
@@ -306,19 +309,19 @@ ollama-skill:
             fetched, long after upstream has moved on. Bump the tag to move the tarball
             distros; the packaged distros ignore it entirely, because pacman owns the
             version there.
-
+            
             ## Service Environment
-
+            
             When deployed via `charly config ollama`, this box automatically provides `OLLAMA_HOST=http://charly-ollama:11434` to all other deployed containers via the `env_provide` mechanism. Use `--update-all` to propagate to already-deployed services:
-
+            
             ```bash
             charly config ollama --update-all
             ```
-
+            
             This means containers like `jupyter-ml-notebook` automatically discover the Ollama endpoint without manual `OLLAMA_HOST` configuration.
-
+            
             ## Related Candies
-
+            
             - `/charly-ollama:ollama-layer` — the ollama CANDY: the binary, the supervisord
               service and the models volume. This page is the BOX; that page is what it composes.
             - `/charly-ollama:ollama-cli` — the compiled-in `charly ollama` management CLI (candy/plugin-ollama)
@@ -327,23 +330,23 @@ ollama-skill:
               `skill:` entity, so a reference form would be a well-formed link to nothing and the
               docs generator's fail-closed gate rejects it.
             - `/charly-jupyter:notebook-ollama` — 6 Jupyter notebooks demonstrating Ollama APIs (requests, OpenAI, ollama lib, Anthropic, HuggingFace, GPU)
-
+            
             ## Related Boxes
-
+            
             Deliberately NOT a list of what composes what. Every such statement here is a claim
             about a `box/<distro>` submodule that this page cannot keep true — the composition
             table above this section used to make exactly that claim and went stale. These are
             pointers to related SUBJECTS; run `charly box list candies <box>` for any actual
             composition.
-
+            
             - `/charly-distros:nvidia` — the GPU base family
             - `/charly-distros:cachyos` — the CachyOS image family, which carries its own ollama boxes
             - `/charly-openclaw:openclaw-desktop` — a desktop image that serves a local ollama
             - `/charly-jupyter:jupyter-ml-notebook` — receives `OLLAMA_HOST` via env_provide when ollama is deployed
             - `/charly-openwebui:openwebui` — receives `OLLAMA_HOST` via env_provide, auto-configures as `OLLAMA_BASE_URL`
-
+            
             ## Verification
-
+            
             After `charly start`:
             - `charly status ollama` — container running
             - `charly service status ollama` — all services RUNNING
@@ -354,12 +357,12 @@ ollama-skill:
               `ollama --version`, `ollama list` exit 0. This is the only one of these that
               reports on the checks; `charly ollama list` lists MODELS and says nothing about
               whether anything passed.
-
+            
             ## When to Use This Skill
-
+            
             **MUST be invoked** when the task involves the ollama box, LLM model serving, or the standalone Ollama deployment. Invoke this skill BEFORE reading source code or launching Explore agents.
-
+            
             ## Related
-
+            
             - `/charly-image:image` — image family umbrella (`candy:` image entries — those carrying `base:`/`from:` — in `charly.yml`, build/validate/inspect/list)
             - `/charly-build:build` — the embedded build vocabulary (distros, builders, init-systems)
