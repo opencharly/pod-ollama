@@ -62,7 +62,10 @@ management CLI (`help` / `version` / `list`).
 
 ## Layout
 
-- `charly.yml` — the `ollama:` candy entity plus its `skill:` entity.
+- `charly.yml` — the `ollama:` candy entity plus its two routing-only `skill:`
+  entities (`ollama`, `ollama-layer`).
+- `.agents/skills/{ollama,ollama-layer}/SKILL.md` — the skill bodies, versioned with
+  the candy they describe.
 - `.github/workflows/tag-on-merge.yml` — CalVer tag + `CHANGELOG/` on merge.
 - `CHANGELOG/` — per-Calver history.
 - `README.md` — this user overview.

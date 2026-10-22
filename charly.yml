@@ -168,3 +168,9 @@ ollama-skill:
             declaration is about what this candy REQUIRES, not about what ends up in the image.
             Runs as a supervisord service on port 11434 with persistent model storage.
             MUST be invoked before building, deploying, configuring, or troubleshooting the ollama box.
+
+ollama-layer-skill:
+    skill:
+        name: ollama-layer
+        family: ollama
+        owner: ollama
