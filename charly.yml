@@ -14,7 +14,7 @@ ollama:
             after upstream moved on. The candy declares NO GPU dependency — a GPU backend is
             an IMAGE-level composition choice (compose ollama-cuda or ollama-rocm). What that
             buys differs by install path, and the difference is worth stating rather than
-            averaging: on a PACKAGED distro the base package is genuinely CPU-only at 66 MiB
+            averaging: on a PACKAGED distro the base package is genuinely CPU-only at 75 MiB
             and a backend is strictly opt-in, which is what keeps this layer small; on the
             TARBALL path the single upstream archive already contains the CUDA backend, so a
             tarball consumer pays for it whether or not any box composes ollama-cuda. Pulled models persist under the ~/.ollama models volume. The running
@@ -44,16 +44,17 @@ ollama:
             # releases/latest/download/... vs releases/download/<tag>/... — so one template
             # could not express both anyway, and pinning matches the house pattern set by
             # CUE_VERSION and APKEEP_VERSION.) Bump it here to move the tarball distros.
-            OLLAMA_VERSION: v0.32.14
+            OLLAMA_VERSION: v0.40.16
         distro:
             # Arch (and its derivatives, CachyOS included) ships ollama in `extra`,
-            # tracking upstream closely — 0.32.14-1 landed the day upstream tagged
-            # v0.32.14. The packaged base is 66 MiB installed (16 MiB download); the
-            # upstream tarball it replaces is a 1.32 GiB DOWNLOAD, because that one
-            # archive bundles the CPU and CUDA backends together (ROCm is NOT in it —
-            # upstream publishes that as a separate ollama-linux-amd64-rocm archive),
-            # while the packages split even CUDA out into the ollama-cuda add-on this
-            # candy deliberately does NOT require.
+            # tracking upstream closely — 0.40.16-2 is in `extra` today (package built
+            # 2026-11-11; upstream published v0.40.16 on 2026-11-09). The packaged base
+            # is 75 MiB installed (19 MiB download); the upstream tarball it replaces is
+            # a 1.44 GiB DOWNLOAD, because that one archive bundles the CPU and CUDA
+            # backends together (ROCm is NOT in it — upstream publishes that as a
+            # separate ollama-linux-amd64-rocm archive), while the packages split even
+            # CUDA out into the ollama-cuda add-on this candy deliberately does NOT
+            # require.
             arch:
                 package:
                     - ollama
@@ -87,7 +88,7 @@ ollama:
             #
             # This is the declarative `download:` verb rather than a hand-rolled curl, so
             # it keeps what the verb provides and a hand-rolled step forfeits: the
-            # content-addressed /tmp/downloads cache (no re-fetch of a 1.32 GiB archive on
+            # content-addressed /tmp/downloads cache (no re-fetch of a 1.44 GiB archive on
             # every cache-miss build), the atomic .part -> mv rename, and the stage-user
             # -correct cache mount. `unless_exists:` is the capability that made that
             # possible; before it, the gate could only be expressed by abandoning the verb.
@@ -101,6 +102,38 @@ ollama:
               file:
                 file: /usr/bin/ollama
                 exists: true
+            # The R7 discriminator for the OLLAMA_VERSION pin — the ONE probe here that
+            # can fail on a version bump. Every other step passes at ANY upstream
+            # release: the runtime `ollama --version` step asserts only the `^ollama
+            # version` PREFIX, and the API steps assert serving, not which binary
+            # serves. So without this step a bump ships with no coverage that could go
+            # red, which is the "coverage must fail without the change" rule (R7).
+            #
+            # Build scope, so it also runs under `charly check box` on a built artifact,
+            # and it reads the CLIENT version line — `ollama --version` prints
+            # `Warning: client version is <v>` whether or not a server is reachable, and
+            # adds `ollama version is <server-v>` when one is. The client line is present
+            # in every case, so `contains` needs no server and cannot be satisfied by a
+            # server's different version alone.
+            #
+            # `exclude_distro` names the packaged path because the pin binds ONLY where
+            # this candy installs the tarball: Arch/CachyOS take the `ollama` package and
+            # pacman owns the version there, so asserting OLLAMA_VERSION on them would be
+            # a false failure the day the package lags upstream. The skip is the design,
+            # not a missing assertion — the tarball path (the one this var moves) runs it.
+            #
+            # The literal below IS the expectation and must move WITH `var.OLLAMA_VERSION`;
+            # a test that read the var would agree with any value it was given and could
+            # never fail.
+            - check: the installed ollama binary reports the release this candy pins (var OLLAMA_VERSION)
+              id: ollama-version-pinned
+              exclude_distro:
+                - arch
+                - cachyos
+              exit_status: 0
+              command: ollama --version
+              stdout:
+                - contains: "0.40.16"
             - check: the running ollama service answers the model-tags API with HTTP 200 on port 11434
               context:
                 - runtime
