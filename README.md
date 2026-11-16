@@ -15,7 +15,7 @@ owns the version; everywhere else the upstream release tarball is extracted to
 
 The candy declares NO GPU dependency — a GPU backend is an IMAGE-level composition
 choice (compose `ollama-cuda` or `ollama-rocm`). What that buys differs by install
-path: on a PACKAGED distro the base package is genuinely CPU-only at 66 MiB and a
+path: on a PACKAGED distro the base package is genuinely CPU-only at 75 MiB and a
 backend is strictly opt-in (which keeps this layer small); on the TARBALL path the
 single upstream archive already contains the CUDA backend, so a tarball consumer
 pays for it whether or not any box composes `ollama-cuda`. The companion
@@ -29,7 +29,7 @@ pays for it whether or not any box composes `ollama-cuda`. The companion
 | Volume | `models` at `~/.ollama` |
 | Env | `OLLAMA_HOST=0.0.0.0`, `OLLAMA_MODELS=~/.ollama/models` |
 | `env_provide` | `OLLAMA_HOST=http://{{.ContainerName}}:11434` |
-| Var | `OLLAMA_VERSION=v0.32.14` (tarball path only) |
+| Var | `OLLAMA_VERSION=v0.40.16` (tarball path only) |
 | Alias | `ollama` |
 
 `OLLAMA_VERSION` is PINNED to a release tag and must stay one: the download cache
