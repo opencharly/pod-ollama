@@ -59,6 +59,11 @@ ollama:
                 package:
                     - ollama
         env:
+            # A host-owned bind makes charly run the container as root under its keep-id
+            # mapping, where the runtime HOME is /root — while the models volume is mounted
+            # at the image user's ~/.ollama. Pin it so a bound deployment resolves
+            # OLLAMA_MODELS (~) to the bound volume instead of /root/.ollama.
+            HOME: "/home/user"
             OLLAMA_HOST: "0.0.0.0"
             OLLAMA_MODELS: "~/.ollama/models"
         env_provide:
