@@ -20,14 +20,18 @@ ollama:
             tarball consumer pays for it whether or not any box composes ollama-cuda. Pulled models persist under the ~/.ollama models volume. The running
             service exposes the Ollama HTTP API (e.g. /api/tags) so any composing box
             can serve and query local models. The companion plugin candy plugin-ollama
-            adds the `charly ollama` management CLI against a deployed server.
+            adds the `charly ollama` management CLI against a deployed server. The service
+            itself runs a charly-owned wrapper: it pulls the OLLAMA_PULL_MODELS defaults and
+            gates the start on GPU readiness, so a start under VRAM pressure fails loudly
+            (supervisord retries) instead of silently running a CPU-only server on a GPU pod —
+            `ollama serve` probes the GPU exactly once, at startup.
         require:
             # GPU-agnostic: the ollama binary auto-detects the GPU at runtime (CPU
             # fallback when none present), so CUDA is an IMAGE-level composition choice
             # (the `ollama` image lists `cuda` explicitly), NOT a layer dependency.
             # This lets CPU consumers (e.g. `openclaw-desktop` on cachyos) compose the
             # layer without dragging the Fedora/NVIDIA `cuda` layer onto a pac base.
-            - '@github.com/opencharly/layer-supervisord:v2026.271.1817'
+            - '@github.com/opencharly/layer-supervisord:v2026.314.0710'
         var:
             # Upstream Ollama release for the TARBALL path only — the distros that
             # package ollama let their package manager own the version.
@@ -44,11 +48,11 @@ ollama:
             # releases/latest/download/... vs releases/download/<tag>/... — so one template
             # could not express both anyway, and pinning matches the house pattern set by
             # CUE_VERSION and APKEEP_VERSION.) Bump it here to move the tarball distros.
-            OLLAMA_VERSION: v0.40.16
+            OLLAMA_VERSION: v0.40.17
         distro:
             # Arch (and its derivatives, CachyOS included) ships ollama in `extra`,
-            # tracking upstream closely — 0.40.16-2 is in `extra` today (package built
-            # 2026-11-11; upstream published v0.40.16 on 2026-11-09). The packaged base
+            # tracking upstream closely — 0.40.17-1 is in `extra` today (package built
+            # 2026-11-21; upstream published v0.40.17 on 2026-11-10). The packaged base
             # is 75 MiB installed (19 MiB download); the upstream tarball it replaces is
             # a 1.44 GiB DOWNLOAD, because that one archive bundles the CPU and CUDA
             # backends together (ROCm is NOT in it — upstream publishes that as a
@@ -61,6 +65,27 @@ ollama:
         env:
             OLLAMA_HOST: "0.0.0.0"
             OLLAMA_MODELS: "~/.ollama/models"
+            # OLLAMA_PULL_MODELS — the model ids this pod carries as its DEFAULTS, as a
+            # space-separated list, pulled once at container start by the
+            # `ollama-models` program below. EMPTY here on purpose: this candy is also
+            # composed by CPU-only consumers (`openclaw-desktop` and friends), and a
+            # default list at this layer would make every one of them start downloading
+            # gigabytes. The list belongs one layer up — a GPU box sets it (the
+            # distro-cachyos `ollama-cdi` box does), and a deploy or a disposable bed
+            # overrides it per run. The store is the persistent `models` volume, so a
+            # pull happens once per host; `ollama pull` is idempotent, so later starts
+            # are no-ops.
+            OLLAMA_PULL_MODELS: ""
+            # GPU-readiness gate for the server wrapper. `ollama serve` decides GPU
+            # availability ONCE, at startup, by creating a CUDA context and reading the
+            # device's memory; under VRAM pressure that context creation fails, the device
+            # is skipped ("skipping pseudo-device with zero memory"), and the server runs
+            # CPU-ONLY for its whole lifetime — even after the VRAM frees. The wrapper
+            # therefore waits for a GPU with real free memory before starting the server,
+            # and refuses to start it CPU-only on a pod that has a GPU passed in.
+            # Set OLLAMA_GPU_MIN_FREE_MIB to 0 to disable the gate (explicit CPU fallback).
+            OLLAMA_GPU_MIN_FREE_MIB: "512"
+            OLLAMA_GPU_WAIT_SECONDS: "600"
         env_provide:
             OLLAMA_HOST: "http://{{.ContainerName}}:11434"
         port:
@@ -73,7 +98,19 @@ ollama:
               command: ollama
         service:
             - name: ollama
-              exec: "ollama serve"
+              # A charly-owned wrapper, not `ollama serve` directly: it starts the server and
+              # rides the default-model pull (OLLAMA_PULL_MODELS) alongside it as a background
+              # child, then waits on the server so supervisord keeps supervising ONE process.
+              #
+              # Why not a separate one-shot program: the rendered supervisord fragment carries
+              # no `startsecs`, and supervisord marks ANY exit before `startsecs` (default 1s)
+              # as a failed start (BACKOFF, "Exited too quickly") regardless of `autorestart`;
+              # an immediate-exit program would retry `startretries` times and go FATAL. The
+              # schema can express `type: oneshot`/`start_sec`, the supervisord template does
+              # not render them — measured on the generated fragment, filed separately. Riding
+              # with the server also means a failed pull never puts the server into a bad
+              # supervisor state: it logs and the next start retries it.
+              exec: /opt/ollama/start-ollama.sh
               restart: always
               enable: true
               scope: system
@@ -101,6 +138,106 @@ ollama:
             - check: the ollama binary is installed at /usr/bin/ollama
               file:
                 file: /usr/bin/ollama
+                exists: true
+            # The server wrapper. Charly-owned (written here, never downloaded from an
+            # upstream install tree): start the server, ride the default-model pull beside it,
+            # forward signals, and return the server's exit code. `write:` keeps the body out
+            # of a shell heredoc so `$`, `${…}` and `!` are delivered byte-for-byte.
+            - run: write the charly-owned ollama server wrapper
+              write: /opt/ollama/start-ollama.sh
+              mode: "0755"
+              run_as: root
+              content: |
+                #!/bin/bash
+                # start-ollama.sh — the ollama service's entrypoint.
+                #
+                # Starts `ollama serve`, and when OLLAMA_PULL_MODELS is non-empty rides a
+                # background pull of those models alongside it: bounded wait for the API,
+                # then an idempotent `ollama pull` per id. An empty list is a no-op, so a
+                # CPU-only consumer downloads nothing. The wrapper stays in the foreground
+                # and waits on the server, so supervisord supervises ONE process and a
+                # failed pull never changes the server's supervisor state.
+                set -uo pipefail
+
+                pull_models() {
+                  # Bounded readiness wait: the deadline is the guard, not a blind retry.
+                  local deadline=$((SECONDS + 120))
+                  until ollama list >/dev/null 2>&1; do
+                    if [ "$SECONDS" -ge "$deadline" ]; then
+                      echo "ollama-models: the ollama API did not answer within 120s" >&2
+                      return 1
+                    fi
+                    sleep 2
+                  done
+                  local model
+                  for model in $OLLAMA_PULL_MODELS; do
+                    [ -n "$model" ] || continue
+                    echo "ollama-models: pulling ${model}"
+                    if ! ollama pull "${model}"; then
+                      echo "ollama-models: pull failed for ${model}" >&2
+                      return 1
+                    fi
+                  done
+                  echo "ollama-models: every declared model is present"
+                }
+
+                # wait_for_gpu blocks until an NVIDIA device passed into this pod reports
+                # enough free VRAM for `ollama serve`'s one-shot CUDA discovery, or the
+                # deadline expires. A CPU-only consumer (no /dev/nvidiactl) returns
+                # immediately, so the candy stays GPU-agnostic: it DETECTS a device, it does
+                # not declare one.
+                wait_for_gpu() {
+                  [ -e /dev/nvidiactl ] || return 0
+                  command -v nvidia-smi >/dev/null 2>&1 || return 0
+                  local min_free="${OLLAMA_GPU_MIN_FREE_MIB:-512}"
+                  [ "$min_free" -gt 0 ] || return 0
+                  local deadline=$((SECONDS + ${OLLAMA_GPU_WAIT_SECONDS:-600}))
+                  local free_mib
+                  while :; do
+                    free_mib=$(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | sort -n | tail -1)
+                    if [ -n "$free_mib" ] && [ "$free_mib" -ge "$min_free" ]; then
+                      echo "ollama-gpu: ${free_mib} MiB free (>= ${min_free} MiB) — starting the server with GPU access"
+                      return 0
+                    fi
+                    if [ "$SECONDS" -ge "$deadline" ]; then
+                      echo "ollama-gpu: no GPU with >= ${min_free} MiB free within ${OLLAMA_GPU_WAIT_SECONDS:-600}s (last reading: ${free_mib:-unavailable} MiB)." >&2
+                      echo "ollama-gpu: refusing to start the server CPU-only on a pod that has a GPU; supervisord will retry. Set OLLAMA_GPU_MIN_FREE_MIB=0 to allow a CPU fallback deliberately." >&2
+                      return 1
+                    fi
+                    sleep 5
+                  done
+                }
+
+                wait_for_gpu || exit 1
+
+                ollama serve &
+                serve_pid=$!
+
+                # Forward a stop to the server; supervisord signals only this wrapper.
+                forward() { kill -TERM "$serve_pid" 2>/dev/null || true; }
+                trap forward TERM INT QUIT
+
+                if [ -n "${OLLAMA_PULL_MODELS:-}" ]; then
+                  pull_models &
+                fi
+
+                wait "$serve_pid"
+                status=$?
+
+                # A forwarded TERM/INT/QUIT interrupts `wait` while the server is still shutting
+                # down, and its return value is then the wrapper's 128+signal, not the server's
+                # own status. Wait AGAIN so the wrapper outlives the server (releasing port
+                # 11434 before supervisord restarts it) and propagate the server's real exit
+                # code.
+                if kill -0 "$serve_pid" 2>/dev/null; then
+                  wait "$serve_pid"
+                  status=$?
+                fi
+
+                exit "$status"
+            - check: the ollama server wrapper is installed at /opt/ollama/start-ollama.sh
+              file:
+                file: /opt/ollama/start-ollama.sh
                 exists: true
             # The R7 discriminator for the OLLAMA_VERSION pin — the ONE probe here that
             # can fail on a version bump. Every other step passes at ANY upstream
@@ -133,7 +270,7 @@ ollama:
               exit_status: 0
               command: ollama --version
               stdout:
-                - contains: "0.40.16"
+                - contains: "0.40.17"
             - check: the running ollama service answers the model-tags API with HTTP 200 on port 11434
               context:
                 - runtime
@@ -186,6 +323,68 @@ ollama:
               command:
                 command: ${CHARLY_BIN} ollama list --server http://127.0.0.1:${HOST_PORT:11434}
                 in_container: false
+            # R7 discriminators that FAIL without this change: neither can pass on an image
+            # whose service still execs `ollama serve` directly.
+            - check: the supervised ollama server runs the charly wrapper, not `ollama serve` directly
+              id: ollama-wrapper-entrypoint
+              exit_status: 0
+              context:
+                - runtime
+              command:
+                command: grep -q 'start[-]ollama' /proc/[0-9]*/cmdline
+                in_container: true
+            # Committed coverage for the PULL: runs the real wrapper on a scratch port with one
+            # small model declared, waits (bounded, with a deadline) for the wrapper's own
+            # completion line, then asserts it. Fails without the wrapper (no script to run) and
+            # with a broken pull (the line never appears). OLLAMA_GPU_MIN_FREE_MIB=0 keeps it
+            # independent of GPU state, so it runs on any composing bed, GPU or not.
+            - check: the wrapper pulls a declared model and reports every declared model present
+              id: ollama-pull-declared-model
+              exit_status: 0
+              timeout: 15m
+              context:
+                - runtime
+              command:
+                command: |
+                  log=/tmp/ollama-pull-check.log
+                  OLLAMA_GPU_MIN_FREE_MIB=0 OLLAMA_HOST=127.0.0.1:11507 OLLAMA_PULL_MODELS=smollm2:135m \
+                    /opt/ollama/start-ollama.sh >"$log" 2>&1 &
+                  w=$!
+                  rc=1
+                  i=0
+                  while [ "$i" -lt 300 ]; do
+                    if grep -q "every declared model is present" "$log" 2>/dev/null; then rc=0; break; fi
+                    if grep -q "pull failed for" "$log" 2>/dev/null; then break; fi
+                    sleep 1
+                    i=$((i+1))
+                  done
+                  kill -TERM "$w" 2>/dev/null
+                  wait "$w" 2>/dev/null
+                  if [ "$rc" -ne 0 ]; then echo "--- wrapper log ---" >&2; cat "$log" >&2; fi
+                  exit "$rc"
+                in_container: true
+            - check: the GPU readiness gate refuses to start the server when no GPU has the required free memory, and names the reason
+              id: ollama-gpu-gate-refuses
+              exit_status: 0
+              context:
+                - runtime
+              command:
+                command: |
+                  # On an image with no GPU device the gate's own no-op branch is what runs;
+                  # say so, so a CPU-only run is visibly a skip rather than a vacuous pass.
+                  if [ ! -e /dev/nvidiactl ]; then
+                    echo "SKIP: no /dev/nvidiactl in this image — the GPU branch does not apply"
+                    exit 0
+                  fi
+                  out=$(OLLAMA_GPU_MIN_FREE_MIB=999999 OLLAMA_GPU_WAIT_SECONDS=1 /opt/ollama/start-ollama.sh 2>&1)
+                  rc=$?
+                  printf '%s\n' "$out"
+                  # rc 1 AND the refusal text: the text can only appear AFTER nvidia-smi returned a
+                  # number below the impossible threshold, so this cannot pass without taking the
+                  # GPU branch.
+                  [ "$rc" -eq 1 ] || exit 1
+                  printf '%s\n' "$out" | grep -q "refusing to start the server"
+                in_container: true
             - agent-check: models pulled via `ollama pull` are stored under the ~/.ollama models volume and survive a service restart
 
 ollama-skill:
