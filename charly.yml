@@ -333,6 +333,36 @@ ollama:
               command:
                 command: grep -q 'start[-]ollama' /proc/[0-9]*/cmdline
                 in_container: true
+            # Committed coverage for the PULL: runs the real wrapper on a scratch port with one
+            # small model declared, waits (bounded, with a deadline) for the wrapper's own
+            # completion line, then asserts it. Fails without the wrapper (no script to run) and
+            # with a broken pull (the line never appears). OLLAMA_GPU_MIN_FREE_MIB=0 keeps it
+            # independent of GPU state, so it runs on any composing bed, GPU or not.
+            - check: the wrapper pulls a declared model and reports every declared model present
+              id: ollama-pull-declared-model
+              exit_status: 0
+              timeout: 15m
+              context:
+                - runtime
+              command:
+                command: |
+                  log=/tmp/ollama-pull-check.log
+                  OLLAMA_GPU_MIN_FREE_MIB=0 OLLAMA_HOST=127.0.0.1:11507 OLLAMA_PULL_MODELS=smollm2:135m \
+                    /opt/ollama/start-ollama.sh >"$log" 2>&1 &
+                  w=$!
+                  rc=1
+                  i=0
+                  while [ "$i" -lt 300 ]; do
+                    if grep -q "every declared model is present" "$log" 2>/dev/null; then rc=0; break; fi
+                    if grep -q "pull failed for" "$log" 2>/dev/null; then break; fi
+                    sleep 1
+                    i=$((i+1))
+                  done
+                  kill -TERM "$w" 2>/dev/null
+                  wait "$w" 2>/dev/null
+                  if [ "$rc" -ne 0 ]; then echo "--- wrapper log ---" >&2; cat "$log" >&2; fi
+                  exit "$rc"
+                in_container: true
             - check: the GPU readiness gate refuses to start the server when no GPU has the required free memory (exit 1), and is a no-op on an image with no GPU
               id: ollama-gpu-gate-refuses
               exit_status: 0
