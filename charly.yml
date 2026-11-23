@@ -223,6 +223,17 @@ ollama:
 
                 wait "$serve_pid"
                 status=$?
+
+                # A forwarded TERM/INT/QUIT interrupts `wait` while the server is still shutting
+                # down, and its return value is then the wrapper's 128+signal, not the server's
+                # own status. Wait AGAIN so the wrapper outlives the server (releasing port
+                # 11434 before supervisord restarts it) and propagate the server's real exit
+                # code.
+                if kill -0 "$serve_pid" 2>/dev/null; then
+                  wait "$serve_pid"
+                  status=$?
+                fi
+
                 exit "$status"
             - check: the ollama server wrapper is installed at /opt/ollama/start-ollama.sh
               file:
@@ -312,6 +323,24 @@ ollama:
               command:
                 command: ${CHARLY_BIN} ollama list --server http://127.0.0.1:${HOST_PORT:11434}
                 in_container: false
+            # R7 discriminators that FAIL without this change: neither can pass on an image
+            # whose service still execs `ollama serve` directly.
+            - check: the supervised ollama server runs the charly wrapper, not `ollama serve` directly
+              id: ollama-wrapper-entrypoint
+              exit_status: 0
+              context:
+                - runtime
+              command:
+                command: grep -q 'start[-]ollama' /proc/[0-9]*/cmdline
+                in_container: true
+            - check: the GPU readiness gate refuses to start the server when no GPU has the required free memory (exit 1), and is a no-op on an image with no GPU
+              id: ollama-gpu-gate-refuses
+              exit_status: 0
+              context:
+                - runtime
+              command:
+                command: "sh -c '[ -e /dev/nvidiactl ] || exit 0; command -v nvidia-smi >/dev/null 2>&1 || exit 0; OLLAMA_GPU_MIN_FREE_MIB=999999 OLLAMA_GPU_WAIT_SECONDS=1 /opt/ollama/start-ollama.sh; [ $? -eq 1 ]'"
+                in_container: true
             - agent-check: models pulled via `ollama pull` are stored under the ~/.ollama models volume and survive a service restart
 
 ollama-skill:
