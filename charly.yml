@@ -363,13 +363,27 @@ ollama:
                   if [ "$rc" -ne 0 ]; then echo "--- wrapper log ---" >&2; cat "$log" >&2; fi
                   exit "$rc"
                 in_container: true
-            - check: the GPU readiness gate refuses to start the server when no GPU has the required free memory (exit 1), and is a no-op on an image with no GPU
+            - check: the GPU readiness gate refuses to start the server when no GPU has the required free memory, and names the reason
               id: ollama-gpu-gate-refuses
               exit_status: 0
               context:
                 - runtime
               command:
-                command: "sh -c '[ -e /dev/nvidiactl ] || exit 0; command -v nvidia-smi >/dev/null 2>&1 || exit 0; OLLAMA_GPU_MIN_FREE_MIB=999999 OLLAMA_GPU_WAIT_SECONDS=1 /opt/ollama/start-ollama.sh; [ $? -eq 1 ]'"
+                command: |
+                  # On an image with no GPU device the gate's own no-op branch is what runs;
+                  # say so, so a CPU-only run is visibly a skip rather than a vacuous pass.
+                  if [ ! -e /dev/nvidiactl ]; then
+                    echo "SKIP: no /dev/nvidiactl in this image — the GPU branch does not apply"
+                    exit 0
+                  fi
+                  out=$(OLLAMA_GPU_MIN_FREE_MIB=999999 OLLAMA_GPU_WAIT_SECONDS=1 /opt/ollama/start-ollama.sh 2>&1)
+                  rc=$?
+                  printf '%s\n' "$out"
+                  # rc 1 AND the refusal text: the text can only appear AFTER nvidia-smi returned a
+                  # number below the impossible threshold, so this cannot pass without taking the
+                  # GPU branch.
+                  [ "$rc" -eq 1 ] || exit 1
+                  printf '%s\n' "$out" | grep -q "refusing to start the server"
                 in_container: true
             - agent-check: models pulled via `ollama pull` are stored under the ~/.ollama models volume and survive a service restart
 
