@@ -23,13 +23,13 @@ pays for it whether or not any box composes `ollama-cuda`. The companion
 
 | Property | Value |
 |---|---|
-| Service | `ollama` (`ollama serve`, `restart: always`, `scope: system`) |
+| Service | `ollama` (a charly-owned wrapper that runs `ollama serve` and rides the default-model pull; `restart: always`, `scope: system`) |
 | Port | `11434` |
 | Requires | `layer-supervisord` |
 | Volume | `models` at `~/.ollama` |
-| Env | `OLLAMA_HOST=0.0.0.0`, `OLLAMA_MODELS=~/.ollama/models` |
+| Env | `OLLAMA_HOST=0.0.0.0`, `OLLAMA_MODELS=~/.ollama/models`, `OLLAMA_PULL_MODELS=` (empty; a space-separated list of default model ids), `OLLAMA_GPU_MIN_FREE_MIB=512`, `OLLAMA_GPU_WAIT_SECONDS=600` |
 | `env_provide` | `OLLAMA_HOST=http://{{.ContainerName}}:11434` |
-| Var | `OLLAMA_VERSION=v0.40.16` (tarball path only) |
+| Var | `OLLAMA_VERSION=v0.40.17` (tarball path only) |
 | Alias | `ollama` |
 
 `OLLAMA_VERSION` is PINNED to a release tag and must stay one: the download cache
