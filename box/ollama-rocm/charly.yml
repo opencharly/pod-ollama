@@ -1,0 +1,14 @@
+ollama-rocm:
+    candy:
+        # Plain CachyOS base, deliberately NOT the nvidia one: this is the AMD
+        # sibling of the `ollama` box, and the ollama-rocm package bundles its own
+        # HIP/HSA runtime (libamdhip64, libhsa-runtime64, libhipblas), so no
+        # NVIDIA/CUDA base and no separate rocm candy are involved.
+        base: cachyos.cachyos
+        platform:
+            - linux/amd64
+        candy:
+            - '@github.com/opencharly/layer-agent-forwarding:v2026.274.0608'
+            - ollama   # the candy THIS repo owns: the box proves the tree, not a pinned copy of itself
+            - '@github.com/opencharly/layer-ollama-rocm:v2026.320.1237'
+            - '@github.com/opencharly/pod-dbus:v2026.274.0648'
