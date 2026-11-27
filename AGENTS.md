@@ -19,8 +19,10 @@ Canonical files:
   `ollama` candy plus the `layer-ollama-cuda` backend, `layer-cuda` (class 2 — the
   CUDA backend LINKS the toolkit), `pod-dbus`, and the four default models in
   `OLLAMA_PULL_MODELS`.
-- `box/ollama-rocm/charly.yml` — the AMD sibling on the plain CachyOS base; proof
-  that the base candy composes with no GPU candy at all.
+- `box/ollama-rocm/charly.yml` — the AMD sibling on the plain CachyOS base, composing the
+  LOCAL `ollama` candy with `layer-agent-forwarding`, `layer-ollama-rocm` (the HIP/HSA runtime
+  the upstream ROCm archive ships) and `pod-dbus`; proof that the base candy composes with no
+  GPU candy at all.
 - `check-cachyos-ollama-pod`, `check-cachyos-ollama-rocm-pod` — the beds live HERE,
   with the boxes they test (`charly.yml`). Both are `disposable: true`; the cdi bed
   claims `requires_shared: [nvidia-gpu]` and proves real GPU inference, the rocm bed
