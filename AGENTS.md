@@ -12,7 +12,19 @@ Canonical files:
 - `charly.yml` — the `ollama:` candy entity (description, `require`, `var`,
   `distro`, `env`, `env_provide`, `port`, `volume`, `alias`, `service`, `plan`)
   and its two ROUTING-ONLY `skill:` entities (`ollama`, `ollama-layer`): the bodies
-  live in `.agents/skills/<name>/SKILL.md`, never inline in the node.
+  live in `.agents/skills/<name>/SKILL.md`, never inline in the node. It also
+  carries the project header (defaults + the `cachyos` / `arch` / `podcdi` imports
+  a standalone consumer needs) and the two disposable R10 beds.
+- `box/ollama-cdi/charly.yml` — the GPU pod image: `podcdi.pod-cdi` base, the LOCAL
+  `ollama` candy plus the `layer-ollama-cuda` backend, `layer-cuda` (class 2 — the
+  CUDA backend LINKS the toolkit), `pod-dbus`, and the four default models in
+  `OLLAMA_PULL_MODELS`.
+- `box/ollama-rocm/charly.yml` — the AMD sibling on the plain CachyOS base; proof
+  that the base candy composes with no GPU candy at all.
+- `check-cachyos-ollama-pod`, `check-cachyos-ollama-rocm-pod` — the beds live HERE,
+  with the boxes they test (`charly.yml`). Both are `disposable: true`; the cdi bed
+  claims `requires_shared: [nvidia-gpu]` and proves real GPU inference, the rocm bed
+  proves the backend SHIPS (no AMD card on this host).
 - `.agents/skills/ollama/SKILL.md`, `.agents/skills/ollama-layer/SKILL.md` — the
   authored skill bodies, versioned with the candy they describe.
 - `.github/workflows/tag-on-merge.yml` — CalVer tag + `CHANGELOG/` on merge.

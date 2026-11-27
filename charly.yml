@@ -1,3 +1,41 @@
+#  opencharly/pod-ollama — the ollama service family: the GPU-agnostic `ollama`
+#  candy (root charly.yml) plus the two boxes that serve it, each proving one
+#  backend choice (`ollama-cdi` on the CDI pod base, `ollama-rocm` on plain
+#  CachyOS). The boxes and their disposable beds live HERE, with the service they
+#  test (AGENTS.md "Repo classes and naming": a bed lives with the thing it
+#  tests); a `distro-*` repo holds the distro family, not one service's box.
+#
+#  A standalone consumer declares what a copy inside the distro inherited: the
+#  base as a NAMESPACED import at the project root (a namespace mounted by a
+#  discovered document does not resolve a box's own `base:`), and the pixi/aur
+#  builder vocabulary (a builder map does not cross a namespace boundary).
+defaults:
+    platform:
+        - linux/amd64
+    tag: auto
+    registry: ghcr.io/opencharly
+    build:
+        - pac
+    builder:
+        aur: arch.arch-builder
+        cargo: arch.arch-builder
+        npm: arch.arch-builder
+        pixi: arch.arch-builder
+    merge:
+        auto: false
+        max_mb: 128
+import:
+    # `ollama-rocm` bases on the CachyOS base directly.
+    - cachyos: '@github.com/opencharly/distro-cachyos:v2026.331.0132'
+    # The builder vocabulary the boxes route their pixi/npm/cargo/aur steps to.
+    - arch: '@github.com/opencharly/distro-arch:v2026.330.1808'
+    # The CDI POD base: a pod takes its GPU driver from the HOST through the CDI
+    # spec, so its image bakes no driver user-space and carries no nvidia-ctk.
+    - podcdi: '@github.com/opencharly/pod-cdi:v2026.329.2115'
+discover:
+    - path: box
+      recursive: true
+
 ollama:
     candy:
         description: |
@@ -406,3 +444,104 @@ ollama-layer-skill:
         name: ollama-layer
         family: ollama
         owner: ollama
+# Disposable R10 pod beds for the two ollama boxes. Each drives the full
+# `charly check run` sequence (build → check box → deploy → check live → fresh
+# update → tear down) on the image of the same name. Deploy- and build-scope
+# check coverage is inherited from the composed layers (the "lowest level"
+# principle); the beds add only what the BOX promises.
+check-cachyos-ollama-pod:
+    pod:
+        image: ollama-cdi
+        disposable: true
+        lifecycle: dev
+        requires_shared: [nvidia-gpu]
+        # NO OLLAMA_PULL_MODELS override: the deployed pod carries the BOX's four-model default, so
+        # the bed pulls and proves exactly what ships. The list is read back from the runtime env
+        # (below), never restated here — one canonical list (R2).
+        description: >-
+            Sole proof the CachyOS GPU ollama-cdi LLM-server image composes and serves on the Arch CUDA base, that the packaged CUDA backend is present, that the compiled-in command:ollama plugin works end-to-end, AND that real inference runs on the passed-through NVIDIA GPU. Builds and deploys the ollama-cdi pod and runs the checks baked into the ollama, ollama-cuda and dbus candies — server HTTP/API liveness, binary/service/port/file probes, the CUDA backend library, and the host-side charly ollama help/version/list steps over the auto-allocated host port — plus the bed's own GPU-inference plan: nvidia-smi enumerates the card via CDI, a tiny model answers a prompt (a real generation pass), and `ollama ps` reports the model 100% GPU-resident (proving the CUDA backend executed it, not CPU fallback). The `requires_shared: [nvidia-gpu]` makes the arbiter flip the IOMMU group vfio→nvidia at deploy and back at teardown, so the pod reaches the card through CDI. On Arch the server comes from the split `ollama` package rather than the upstream tarball, so this bed is also the proof of that install path.
+        plan:
+            - check: the passed-through NVIDIA GPU is visible inside the container via CDI — nvidia-smi enumerates the card
+              id: ollama-gpu-visible
+              context:
+                - runtime
+              command: nvidia-smi -L
+              stdout:
+                - contains: "NVIDIA"
+            - check: ollama runs a real generation pass — a tiny model answers a prompt (the first run pulls the model, hence the raised timeout)
+              id: ollama-gpu-inference
+              context:
+                - runtime
+              timeout: 5m
+              exit_status: 0
+              command: ollama run qwen2.5:0.5b "What is 2+2? Reply with just the number."
+            # The R7 discriminator for the box's default set: EVERY model the deployed env declares
+            # must be in the store, put there by the SERVICE WRAPPER'S start-time pull — no step in
+            # this plan pulls them. It goes RED on an image whose service still execs `ollama serve`
+            # directly, and RED for a mistyped or removed tag (exact match, `grep -qxF "$m"`).
+            #
+            # This is an ASSERTION with a bounded wait, not a second pull. Two earlier versions of
+            # this check failed for reasons unrelated to the store and are recorded here so they are
+            # not retried: (1) run 2026.328.0220 started a SECOND scratch wrapper on another port and
+            # sat out its deadline because that second `ollama serve` never answered; (2) run
+            # 2026.328.0315 pulled the models ITSELF and was killed while racing the wrapper's own
+            # concurrent pull of the same 6 GB. And run 2026.328.0152 failed because THAT run raised
+            # the bed's GPU gate to 2 GiB on a contended card, so the wrapper refused to start the
+            # server at all and the start-time pull never ran — an artefact of the gate experiment,
+            # not of this check. The wrapper pulls at start; this asserts the result.
+            - check: every model the box declares in OLLAMA_PULL_MODELS is present in the model store
+              id: ollama-default-models-present
+              context:
+                - runtime
+              timeout: 40m
+              exit_status: 0
+              command:
+                command: |
+                  models="$OLLAMA_PULL_MODELS"
+                  if [ -z "$models" ]; then echo "the deployed env declares no OLLAMA_PULL_MODELS"; exit 1; fi
+                  echo "declared: $models"
+                  i=0
+                  while [ "$i" -lt 900 ]; do
+                    all=1
+                    for m in $models; do
+                      ollama list | awk 'NR>1 {print $1}' | grep -qxF "$m" || all=0
+                    done
+                    if [ "$all" -eq 1 ]; then break; fi
+                    sleep 2
+                    i=$((i+1))
+                  done
+                  for m in $models; do
+                    if ollama list | awk 'NR>1 {print $1}' | grep -qxF "$m"; then echo "PRESENT $m"; else echo "MISSING $m"; exit 1; fi
+                  done
+                in_container: true
+            - check: the model is resident on the GPU — ollama ps reports 100% GPU in the processor column, proving the CUDA backend executed the generation rather than CPU fallback
+              id: ollama-gpu-resident
+              context:
+                - runtime
+              command: |
+                set -eu
+                # LOAD a model WITH a keep-alive first. `ollama ps` lists only LOADED models, and a
+                # bare `ollama ps` at this point lists none: the preceding checks can run after the
+                # server's default keep-alive window, so the check was red on a CLEAN image and its
+                # subject (the CUDA backend executed) was already proven by ollama-gpu-inference.
+                m=$(ollama list | awk 'NR>1 {print $1}' | head -1)
+                curl -fsS http://127.0.0.1:11434/api/generate \
+                  -d "{\"model\":\"$m\",\"prompt\":\"hi\",\"keep_alive\":\"10m\",\"stream\":false}" >/dev/null
+                ollama ps
+              stdout:
+                - contains: "100% GPU"
+# check-cachyos-ollama-rocm-pod — the AMD sibling of check-cachyos-ollama-pod, and
+# the sole consumer that proves candy/ollama-rocm. Plain cachyos base (no NVIDIA),
+# so it also proves the base ollama candy composes without any GPU candy at all.
+# SCOPE BOUNDARY, stated so nobody reads more into a green run than it earns: on a
+# host with no AMD card this proves composition, that the ROCm backend library
+# actually ships, and that the server reaches steady state — NOT that inference
+# runs on an AMD GPU. Live GPU enumeration needs a real card passed through, the
+# same limit candy/rocm states for itself. Ollama falls back to CPU here, which is
+# why every inherited runtime check still passes.
+check-cachyos-ollama-rocm-pod:
+    pod:
+        image: ollama-rocm
+        disposable: true
+        lifecycle: dev
+        description: Sole proof the CachyOS AMD ollama-rocm image composes on the plain CachyOS base and serves, and the sole consumer proving the ollama-rocm backend candy. Builds and deploys the ollama-rocm pod and runs the checks baked into the ollama, ollama-rocm and dbus candies — server HTTP/API liveness, binary/service/port/file probes, the ROCm/HIP backend library, and the host-side charly ollama help/version/list steps over the auto-allocated host port. Without an AMD card passed through the server runs CPU inference, so this bed proves the backend SHIPS, not that it executes on a GPU.
