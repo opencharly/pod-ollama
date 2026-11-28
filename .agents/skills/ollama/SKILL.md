@@ -199,7 +199,6 @@ This means containers like `jupyter-ml-notebook` automatically discover the Olla
   backticks, not as `/charly-<plugin>:<skill>` references: neither candy declares a
   `skill:` entity, so a reference form would be a well-formed link to nothing and the
   docs generator's fail-closed gate rejects it.
-- `/charly-jupyter:notebook-ollama` — 6 Jupyter notebooks demonstrating Ollama APIs (requests, OpenAI, ollama lib, Anthropic, HuggingFace, GPU)
 
 ## Related Boxes
 
